@@ -1,12 +1,18 @@
 #!/bin/bash
 
-set -xe
+#set -x
+set -e
+
 # This script takes as a parameter the name of the VM
 # and creates a linked clone
 # Ref: https://unix.stackexchange.com/a/33584
-# The scripts assumes that it runs from the same folder 
-# where the vm image is located and it coincides with the 
-# image name
+# Ref: https://gist.github.com/aojea/7b32879f949f909f241d41c4c9dbf80c
+# Changes:
+#   * VM shutdown replaced with check
+#   * One or less QCOW2 image device support (check added)
+#   * Start form image directory not required anymore
+#   * Base VM name don't have to be the same as image name anymore
+#   * Temporary file is not created anymore
 
 # if less than two arguments supplied, display usage 
 if [  $# -ne 2 ] 
@@ -16,32 +22,51 @@ then
     exit 1
 fi 
 
-VM_NAME=$1
-VM_CLONE=$2
+VM_NAME="$1"
+VM_CLONE="$2"
 
 # You cannot "clone" a running vm, stop it.  suspend and destroy
 # are also valid options for less graceful cloning
-if  virsh --connect=qemu:///system list | grep $VM_NAME
-then
-    virsh --connect=qemu:///system shutdown $VM_NAME
-    sleep 60
+if  virsh list | grep "$VM_NAME" &> /dev/null ; then
+  echo "(!) Base VM have to be in stopped state to used as clone base.
+    Stop it using, for example, one of following commands, and re-run this script:
+      virsh shutdown \"$VM_NAME\"
+      virsh suspend \"$VM_NAME\"
+      virsh destroy \"$VM_NAME\"
+    Exiting..."
+  exit 1
 fi
+
+# Get VM XML to variable
+VM_XML="$(virsh dumpxml --domain "$VM_NAME")"
+
+# Check if VM has one or less QCOW2 image device
+if [ $(echo "$VM_XML" | grep -o -P "(?<=').*?\.qcow2(?=')" | wc -l) -gt 1 ]; then
+  echo "(!) VM's with one QCOW2 image device supported as clone base only.
+    Exiting..."
+  exit 1
+fi
+
+# Get QCOW2 image pathname (the first only)
+VM_IMAGE="$(echo "$VM_XML" | grep -o -P "(?<=').*?\.qcow2(?=')" | head -n 1)"
+
+# Create clone VM QCOW2 image pathname
+VM_CLONE_IMAGE="$(echo "$VM_XML" | fgrep .qcow2 | grep -o -P "(?<=').*/(?=.*')" | head -n 1)$VM_CLONE.qcow2"
+
 # Make the golden image read only
-chmod a-w $VM_NAME.qcow2
+chmod a-w "$VM_IMAGE"
+
+# Create linked clone image
+qemu-img create -q -f qcow2 -F qcow2 -b "$VM_IMAGE" "$VM_CLONE_IMAGE"
 
 # dump the xml for the original
-virsh --connect=qemu:///system dumpxml $VM_NAME > /tmp/golden-vm.xml
-
-# Create a linked clone in the current folder
-qemu-img create -f qcow2 -b $VM_NAME.qcow2 $VM_CLONE.qcow2
-
 # hardware addresses need to be removed, libvirt will assign
 # new addresses automatically
-sed -i /uuid/d /tmp/golden-vm.xml
-sed -i '/mac address/d' /tmp/golden-vm.xml
-
 # and actually rename the vm: (this also updates the storage path)
-sed -i s/$VM_NAME/$VM_CLONE/ /tmp/golden-vm.xml
-
 # finally, create the new vm
-virsh --connect=qemu:///system define /tmp/golden-vm.xml
+virsh define <( \
+  echo "$VM_XML" | \
+  sed /uuid/d | \
+  sed '/mac address/d' | \
+  sed "s/"$VM_NAME"/"$VM_CLONE"/" ) &>  /dev/null
+
