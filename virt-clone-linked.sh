@@ -1,25 +1,36 @@
 #!/bin/bash
 
+# Uncomment for debug
 #set -x
+# No error handling, yet.
 set -e
 
-# This script takes as a parameter the name of the VM
-# and creates a linked clone
-# Ref: https://unix.stackexchange.com/a/33584
-# Ref: https://gist.github.com/aojea/7b32879f949f909f241d41c4c9dbf80c
+# Script creates linked clone VM (duplicate VM with QCOW2 image backed by another QCOW2 image).
+#   Two parameters required: name of base VM and name of new cloned VM
+#
+# URL: https://github.com/d355/virt-clone-linked.sh/blob/main/linked-clone.sh
+# 
+# Ref:
+#   * https://unix.stackexchange.com/a/33584
+#   * https://gist.github.com/aojea/7b32879f949f909f241d41c4c9dbf80c
+#
 # Changes:
 #   * VM shutdown replaced with check
 #   * One or less QCOW2 image device support (check added)
 #   * Start form image directory not required anymore
 #   * Base VM name don't have to be the same as image name anymore
 #   * Temporary file is not created anymore
+#   * Minor cosmetic fixes
 
-# if less than two arguments supplied, display usage 
+# If less than two arguments supplied, display usage 
 if [  $# -ne 2 ] 
 then 
-    echo "This script takes as input the name of the VM to clone"
-    echo "Usage: $0 vm_name_orig vm_name_clone"
-    exit 1
+  echo \
+"Script creates linked clone VM 
+   (duplicate VM with QCOW2 image backed by another QCOW2 image).
+   
+   Usage: $0 base_VM_name new_cloned_VM_name"
+  exit 1
 fi 
 
 VM_NAME="$1"
@@ -28,7 +39,8 @@ VM_CLONE="$2"
 # You cannot "clone" a running vm, stop it.  suspend and destroy
 # are also valid options for less graceful cloning
 if  virsh list | grep "$VM_NAME" &> /dev/null ; then
-  echo "(!) Base VM have to be in stopped state to used as clone base.
+  echo \
+"(!) Base VM have to be in stopped state to used as clone base.
     Stop it using, for example, one of following commands, and re-run this script:
       virsh shutdown \"$VM_NAME\"
       virsh suspend \"$VM_NAME\"
@@ -42,7 +54,8 @@ VM_XML="$(virsh dumpxml --domain "$VM_NAME")"
 
 # Check if VM has one or less QCOW2 image device
 if [ $(echo "$VM_XML" | grep -o -P "(?<=').*?\.qcow2(?=')" | wc -l) -gt 1 ]; then
-  echo "(!) VM's with one QCOW2 image device supported as clone base only.
+  echo \
+"(!) VM's with one QCOW2 image device supported as clone base only.
     Exiting..."
   exit 1
 fi
