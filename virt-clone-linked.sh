@@ -21,6 +21,10 @@ set -e
 #   * Base VM name don't have to be the same as image name anymore
 #   * Temporary file is not created anymore
 #   * Minor cosmetic fixes
+#
+# Changes forked:
+#	* Works for UEFI VM on CentOS 
+
 
 # If less than two arguments supplied, display usage 
 if [  $# -ne 2 ] 
@@ -66,20 +70,38 @@ VM_IMAGE="$(echo "$VM_XML" | grep -o -P "(?<=').*?\.qcow2(?=')" | head -n 1)"
 # Create clone VM QCOW2 image pathname
 VM_CLONE_IMAGE="$(echo "$VM_XML" | fgrep .qcow2 | grep -o -P "(?<=').*/(?=.*')" | head -n 1)$VM_CLONE.qcow2"
 
-# Make the golden image read only
-chmod a-w "$VM_IMAGE"
+# Make VM disk readonly, first remove disk, then load it as readonly
+virsh detach-disk --domain "$VM_NAME" "$VM_IMAGE" --config
+virsh attach-disk --domain "$VM_NAME" "$VM_IMAGE" --target vda --config --mode readonly --subdriver qcow2
+
+# Clone VM with virt-clone (readonly disks are not cloned, just referenced)
+virt-clone --original "$VM_NAME" --name "$VM_CLONE" --auto-clone
 
 # Create linked clone image
 qemu-img create -q -f qcow2 -F qcow2 -b "$VM_IMAGE" "$VM_CLONE_IMAGE"
+
+# In cloned VM, remove the referenced VM disk image and replace with linked image
+virsh detach-disk --domain "$VM_CLONE" "$VM_IMAGE" --config
+virsh attach-disk --domain "$VM_CLONE" "$VM_CLONE_IMAGE" --target vda --config --subdriver qcow2
+
+# Make the golden image read only
+chmod a-w "$VM_IMAGE"
+
+
+# Virt-manager doesn't update values, use virsh define to force.
+virsh define "/etc/libvirt/qemu/${VM_NAME}.xml"
+virsh define "/etc/libvirt/qemu/${VM_CLONE}.xml"
 
 # dump the xml for the original
 # hardware addresses need to be removed, libvirt will assign
 # new addresses automatically
 # and actually rename the vm: (this also updates the storage path)
 # finally, create the new vm
-virsh define <( \
-  echo "$VM_XML" | \
-  sed /uuid/d | \
-  sed '/mac address/d' | \
-  sed "s/"$VM_NAME"/"$VM_CLONE"/" ) &>  /dev/null
+
+# virsh define <( \
+#  echo "$VM_XML" | \
+#  sed /uuid/d | \
+#  sed '/mac address/d' | \
+#  sed "s/"$VM_NAME"/"$VM_CLONE"/" ) &>  /dev/null
+
 
